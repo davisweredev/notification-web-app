@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Live Chat</title>
+    <meta charset="utf-8">
+</head>
+
+<body>
+    <h1>Live Chat - Welcome {{ request.user.username }}</h1>
+
+    <!-- Select recipient -->
+    <div>
+        <label for="recipient">Send to:</label>
+        <select id="recipient">
+            {% for u in users %}
+            <option value="{{ u.id }}">{{ u.username }}</option>
+            {% empty %}
+            <option value="">No other users</option>
+            {% endfor %}
+        </select>
+    </div>
+
+    <!-- Chat messages -->
+    <div style="border: 1px solid #ccc; height: 400px; overflow-y: scroll; margin: 20px 0; padding: 10px;">
+        <ul id="chat-list">
+            {% for msg in messages %}
+            <li><strong>{{ msg.sender.username }}:</strong> {{ msg.message }} <small>({{ msg.created_at }})</small></li>
+            {% empty %}
+            <li>No messages yet</li>
+            {% endfor %}
+        </ul>
+    </div>
+
+    <!-- Send new message -->
+    <form id="chat-form">
+        {% csrf_token %}
+        <input type="text" id="chat-message" placeholder="Type your message here..." required style="width: 300px;">
+        <button type="submit">Send</button>
+    </form>
+
+    <div id="status" style="margin-top: 10px;"></div>
+
+    <script>
+        // Get CSRF token
+        function getCookie(name) {
+            let cookieValue = null;
+            if (document.cookie && document.cookie !== '') {
+                const cookies = document.cookie.split(';');
+                for (let i = 0; i < cookies.length; i++) {
+                    const cookie = cookies[i].trim();
+                    if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                        cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                        break;
+                    }
+                }
+            }
+            return cookieValue;
+        }
+        const csrftoken = getCookie('csrftoken');
+
+        // WebSocket connection
+        let ws;
+        function connectWebSocket() {
+            // Use the same protocol and host as the page
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = protocol + '//' + window.location.host + '/ws/notifications/';
+
+            console.log('Connecting to WebSocket:', wsUrl);
+
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = function (event) {
+                console.log("✅ WebSocket connected successfully");
+                document.getElementById('status').textContent = "Connected";
+                document.getElementById('status').style.color = "green";
+            };
+
+            ws.onmessage = function (event) {
+                console.log("📨 Received WebSocket message:", event.data);
+                const data = JSON.parse(event.data);
+
+                const list = document.getElementById('chat-list');
+                const li = document.createElement('li');
+
+                if (data.type === 'notification') {
+                    li.innerHTML = `<strong>${data.sender}:</strong> ${data.message} <small>(just now)</small>`;
+                    list.appendChild(li);
+
+                    // Scroll to bottom
+                    list.parentElement.scrollTop = list.parentElement.scrollHeight;
+                }
+            };
+
+            ws.onclose = function (event) {
+                console.log("❌ WebSocket disconnected:", event);
+                document.getElementById('status').textContent = "Disconnected - Retrying in 3s...";
+                document.getElementById('status').style.color = "red";
+
+                // Attempt to reconnect after 3 seconds
+                setTimeout(connectWebSocket, 3000);
+            };
+
+            ws.onerror = function (error) {
+                console.error("💥 WebSocket error:", error);
+                document.getElementById('status').textContent = "Connection error";
+                document.getElementById('status').style.color = "red";
+            };
+        }
+
+        // Message form handler
+        const form = document.getElementById('chat-form');
+        form.addEventListener('submit', function (e) {
+            e.preventDefault();
+            const messageInput = document.getElementById('chat-message');
+            const message = messageInput.value.trim();
+            const recipient = document.getElementById('recipient').value;
+
+            if (!message || !recipient) {
+                alert('Please enter a message and select a recipient');
+                return;
+            }
+
+            console.log('Sending message:', message, 'to recipient:', recipient);
+
+            fetch('/notifications/send/', {
+                method: 'POST',
+                headers: {
+                    'X-CSRFToken': csrftoken,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    message: message,
+                    recipient_id: parseInt(recipient)
+                })
+            })
+                .then(res => res.json())
+                .then(data => {
+                    console.log('Send response:', data);
+                    if (data.status === 'ok') {
+                        messageInput.value = '';
+                    } else {
+                        alert('Error: ' + (data.message || 'Failed to send message'));
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert('Error sending message');
+                });
+        });
+
+        // Initialize WebSocket connection when page loads
+        document.addEventListener('DOMContentLoaded', function () {
+            console.log('DOM loaded, connecting WebSocket...');
+            connectWebSocket();
+        });
+    </script>
+</body>
+
+</html>
